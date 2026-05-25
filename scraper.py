@@ -99,6 +99,17 @@ class NFSeScraper:
         nums = [int(a.get_text(strip=True)) for a in links if a.get_text(strip=True).isdigit()]
         return max(nums) if nums else 1
 
+    def _situacao(self, cell) -> str:
+        img = cell.find("img")
+        if img:
+            titulo = img.get("data-original-title", "")
+            if titulo == "NFS-e emitida":
+                return "Normal"
+            if titulo == "NFS-e cancelada":
+                return "Cancelada"
+            return titulo  # fallback para outros status futuros
+        return cell.get_text(strip=True)
+
     def _extrair_pagina(self, pg: int) -> list[dict]:
         r = self._get(EMITIDAS_URL, self._params(pg))
         soup = BeautifulSoup(r.text, "html.parser")
@@ -114,6 +125,6 @@ class NFSeScraper:
                 "Competência":        cells[2].get_text(strip=True),
                 "Município Emissor":  cells[3].get_text(strip=True),
                 "Preço Serviço (R$)": cells[4].get_text(strip=True),
-                "Situação":           cells[5].get_text(strip=True) if len(cells) > 5 else "",
+                "Situação":           self._situacao(cells[5]) if len(cells) > 5 else "",
             })
         return rows

@@ -107,7 +107,7 @@ async function extrairPagina(di, df, pg) {
       "Competência":        cells[2].innerText.trim(),
       "Município Emissor":  cells[3].innerText.trim(),
       "Preço Serviço (R$)": cells[4].innerText.trim(),
-      "Situação":           cells[5] ? cells[5].innerText.trim() : "",
+      "Situação":           cells[5] ? parseSituacao(cells[5]) : "",
     });
   });
   return rows;
@@ -118,6 +118,21 @@ async function fetchPagina(di, df, pg) {
   const resp = await fetch(url, { credentials: "include" });
   if (resp.url.includes("Login") || resp.url.includes("login")) return null;
   return resp.text();
+}
+
+// ------------------------------------------------------------------
+// Utilitário de situação
+// ------------------------------------------------------------------
+
+function parseSituacao(cell) {
+  const img = cell.querySelector("img");
+  if (img) {
+    const titulo = img.getAttribute("data-original-title") || "";
+    if (titulo === "NFS-e emitida")   return "Normal";
+    if (titulo === "NFS-e cancelada") return "Cancelada";
+    return titulo; // fallback para outros status futuros
+  }
+  return cell.innerText.trim();
 }
 
 // ------------------------------------------------------------------
