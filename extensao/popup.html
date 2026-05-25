@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+    body { width: 320px; padding: 16px; background: #f9f9f9; }
+
+    h2 { font-size: 15px; color: #1a5276; margin-bottom: 12px; }
+
+    label { font-size: 12px; color: #555; display: block; margin-bottom: 2px; }
+    input[type="date"] {
+      width: 100%; padding: 6px 8px; border: 1px solid #ccc;
+      border-radius: 4px; font-size: 13px; margin-bottom: 10px;
+    }
+
+    button {
+      width: 100%; padding: 9px; border: none; border-radius: 4px;
+      font-size: 13px; font-weight: bold; cursor: pointer;
+    }
+    #btnBuscar  { background: #1abc9c; color: white; }
+    #btnBuscar:disabled { background: #aaa; cursor: not-allowed; }
+    #btnBaixar  { background: #1a5276; color: white; margin-top: 8px; display: none; }
+
+    #status {
+      margin-top: 10px; font-size: 12px; color: #333;
+      background: #eaf4fb; border-radius: 4px; padding: 6px 8px;
+      display: none;
+    }
+    #log {
+      margin-top: 8px; font-size: 11px; color: #444;
+      background: #fff; border: 1px solid #ddd; border-radius: 4px;
+      padding: 6px 8px; max-height: 160px; overflow-y: auto;
+      display: none; white-space: pre-wrap; font-family: monospace;
+    }
+    .aviso { color: #e67e22; font-size: 11px; margin-top: 4px; display: none; }
+  </style>
+</head>
+<body>
+  <h2>📄 NFS-e — Extrator de Relatórios</h2>
+
+  <label>Data Inicial</label>
+  <input type="date" id="dataInicio" />
+
+  <label>Data Final</label>
+  <input type="date" id="dataFim" />
+
+  <p class="aviso" id="avisoLimite">⚠️ O portal limita a 30 dias por consulta.</p>
+
+  <button id="btnBuscar">🔍 Buscar e Baixar Excel</button>
+  <button id="btnBaixar">⬇️ Baixar Excel</button>
+
+  <div id="status"></div>
+  <div id="log"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

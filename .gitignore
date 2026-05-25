@@ -1,0 +1,19 @@
+# Certificados digitais
+*.pfx
+*.p12
+*.cer
+*.crt
+*.key
+
+# Ambiente virtual Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Streamlit
+.streamlit/
+
+# Sistema
+.DS_Store
+Thumbs.db
