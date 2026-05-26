@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import streamlit as st
 
 from scraper import NFSeScraper, ScraperError
-from report import generate_report
+from report import generate_report, generate_report_completo
 
 
 st.set_page_config(
@@ -49,7 +49,13 @@ if (data_final - data_inicial).days > 30:
 
 st.divider()
 
-modo_teste = st.checkbox("Modo teste (somente 10 primeiras páginas)")
+modo_teste      = st.checkbox("Modo teste (somente 10 primeiras páginas)")
+relatorio_tipo  = st.radio(
+    "Tipo de relatório",
+    options=["Simples", "Completo (com dados da nota)"],
+    horizontal=True,
+    help="Simples: 6 colunas básicas. Completo: inclui todos os campos do XML de cada nota (mais lento).",
+)
 
 if st.button("🔍  Buscar e Gerar Relatório", type="primary", use_container_width=True):
     progress_bar = st.progress(0, text="Iniciando…")
@@ -63,12 +69,15 @@ if st.button("🔍  Buscar e Gerar Relatório", type="primary", use_container_wi
         log_lines.append(msg)
         log_area.code("\n".join(log_lines), language=None)
 
+    relatorio_completo = relatorio_tipo.startswith("Completo")
+
     scraper = NFSeScraper(
         data_inicial=data_inicial.strftime("%d/%m/%Y"),
         data_final=data_final.strftime("%d/%m/%Y"),
         progress_callback=on_progress,
         log_callback=on_log,
         max_pages=10 if modo_teste else 0,
+        fetch_xml=relatorio_completo,
     )
 
     records = None
@@ -93,13 +102,15 @@ if st.button("🔍  Buscar e Gerar Relatório", type="primary", use_container_wi
         else:
             st.success(f"✅  {len(records)} nota(s) encontrada(s).")
 
-            xlsx_bytes = generate_report(
+            gen_fn   = generate_report_completo if relatorio_completo else generate_report
+            suffix   = "_completo" if relatorio_completo else ""
+            xlsx_bytes = gen_fn(
                 records,
                 data_inicial.strftime("%d/%m/%Y"),
                 data_final.strftime("%d/%m/%Y"),
             )
 
-            filename = f"NFSe_{data_inicial.strftime('%d-%m-%Y')}_a_{data_final.strftime('%d-%m-%Y')}.xlsx"
+            filename = f"NFSe_{data_inicial.strftime('%d-%m-%Y')}_a_{data_final.strftime('%d-%m-%Y')}{suffix}.xlsx"
 
             st.download_button(
                 label="⬇️  Baixar Relatório Excel",

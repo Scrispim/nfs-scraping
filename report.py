@@ -205,7 +205,7 @@ def _write_group_table(ws, df: pd.DataFrame, row: int, title: str, group_col: st
 
 
 # ------------------------------------------------------------------
-# Aba Detalhes
+# Aba Detalhes (relatório simples — 6 colunas)
 # ------------------------------------------------------------------
 
 def _build_details(wb: Workbook, df: pd.DataFrame):
@@ -264,5 +264,150 @@ def _build_details(wb: Workbook, df: pd.DataFrame):
     total_c.alignment = Alignment(horizontal="center")
 
     # Auto-filter
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
+    ws.freeze_panes = "A2"
+
+
+# ------------------------------------------------------------------
+# Relatório Completo (com todos os campos do XML)
+# ------------------------------------------------------------------
+
+_HEADERS_COMPLETO = [
+    # Colunas base da tabela
+    "Geração", "Emitida Para", "Competência", "Município Emissor",
+    "Preço Serviço (R$)", "Situação",
+    # Identificação
+    "Número NFS-e", "Chave de Acesso", "Situação NFS-e", "Número DPS",
+    "Série", "Data Emissão", "Data Competência", "Localidade Incidência",
+    # Prestador
+    "CNPJ/CPF Prestador", "Nome Prestador",
+    "Simples Nacional", "Regime Apuração SN", "Regime Esp. Tributação",
+    # Tomador
+    "CNPJ/CPF Tomador", "Nome Tomador", "Email Tomador",
+    "Logradouro Tom.", "Número End. Tom.", "Bairro Tom.", "CEP Tom.", "Município Tom.",
+    # Serviço
+    "Cód. Serviço", "Cód. Trib. Municipal", "Cód. NBS",
+    "Desc. Tributação Nac.", "Desc. Tributação Mun.", "Desc. NBS", "Discriminação",
+    # Valores
+    "Valor Serviço", "Desc. Incondicionado", "Desc. Condicionado",
+    "DED/RED (%)", "Valor DED/RED",
+    "Base de Cálculo", "Alíquota ISS (%)", "Tipo Ret. ISSQN", "Valor ISSQN",
+    # PIS/COFINS
+    "CST PIS/COFINS", "Base Cálc. PIS/COFINS",
+    "Alíquota PIS (%)", "Alíquota COFINS (%)", "Valor PIS", "Valor COFINS",
+    "Tipo Ret. PIS/COFINS",
+    # Retenções
+    "Retenção CP", "Retenção IRRF", "Retenção CSLL",
+    # Totais
+    "Valor Total Retenções", "Valor Líquido",
+    # Metadados
+    "URL",
+]
+
+_WIDTHS_COMPLETO = [
+    14, 40, 14, 22, 20, 14,                          # base
+    16, 44, 14, 16, 10, 20, 18, 22,                  # identificação
+    20, 36, 14, 18, 20,                               # prestador
+    20, 36, 32, 30, 18, 20, 14, 14,                  # tomador
+    16, 18, 12, 28, 28, 16, 60,                      # serviço
+    18, 18, 18, 12, 16, 18, 16, 16, 18,              # valores ISSQN
+    14, 20, 16, 18, 16, 16, 18,                      # PIS/COFINS
+    16, 16, 16,                                       # retenções
+    22, 18,                                           # totais
+    60,                                               # URL
+]
+
+_MONEY_COLS_COMPLETO = {
+    "Preço Serviço (R$)", "Valor Serviço",
+    "Desc. Incondicionado", "Desc. Condicionado", "Valor DED/RED",
+    "Base de Cálculo", "Valor ISSQN",
+    "Base Cálc. PIS/COFINS", "Valor PIS", "Valor COFINS",
+    "Retenção CP", "Retenção IRRF", "Retenção CSLL",
+    "Valor Total Retenções", "Valor Líquido",
+}
+_PCT_COLS_COMPLETO = {"Alíquota ISS (%)", "Alíquota PIS (%)", "Alíquota COFINS (%)", "DED/RED (%)"}
+_LEFT_COLS_COMPLETO = {"Emitida Para", "Nome Prestador", "Nome Tomador", "Email Tomador", "Discriminação", "URL"}
+
+
+def generate_report_completo(records: list[dict], data_inicial: str, data_final: str) -> bytes:
+    """Gera relatório Excel completo com todos os campos do XML de cada nota."""
+    df = _to_dataframe(records)
+    buf = io.BytesIO()
+    wb = Workbook()
+
+    _build_summary(wb, df, data_inicial, data_final)
+    _build_details_completo(wb, df)
+
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _build_details_completo(wb: Workbook, df: pd.DataFrame):
+    ws = wb.create_sheet("Detalhes")
+    ws.sheet_view.showGridLines = False
+
+    headers    = _HEADERS_COMPLETO
+    col_widths = _WIDTHS_COMPLETO
+
+    # Cabeçalho
+    for i, h in enumerate(headers, 1):
+        c = ws.cell(row=1, column=i, value=h)
+        c.font = Font(bold=True, size=10, color=_HEADER_FONT_COLOR)
+        c.fill = PatternFill("solid", fgColor=_GREEN_DARK)
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        c.border = _thin_border()
+        ws.column_dimensions[get_column_letter(i)].width = col_widths[i - 1]
+    ws.row_dimensions[1].height = 28
+
+    if df.empty:
+        return
+
+    # Garante que todas as colunas existam no df
+    for h in headers:
+        if h not in df.columns:
+            df[h] = ""
+
+    for row_idx, (_, row) in enumerate(df[headers].iterrows(), start=2):
+        fill = PatternFill("solid", fgColor=_ZEBRA) if row_idx % 2 == 0 else PatternFill("solid", fgColor="FFFFFF")
+        for col_idx, (h, val) in enumerate(zip(headers, row), start=1):
+            c = ws.cell(row=row_idx, column=col_idx)
+            if h == "Geração" and pd.notna(val) and isinstance(val, pd.Timestamp):
+                c.value = val.to_pydatetime()
+                c.number_format = "DD/MM/YYYY"
+            elif h in _MONEY_COLS_COMPLETO:
+                c.value = _parse_value(str(val))
+                c.number_format = '#,##0.00'
+            elif h in _PCT_COLS_COMPLETO:
+                c.value = _parse_value(str(val))
+                c.number_format = '0.00'
+            else:
+                c.value = str(val) if pd.notna(val) else ""
+            c.fill = fill
+            c.border = _thin_border()
+            c.alignment = Alignment(
+                horizontal="left" if h in _LEFT_COLS_COMPLETO else "center",
+                vertical="center",
+                wrap_text=(h == "Discriminação"),
+            )
+
+    # Linha de total
+    total_row = ws.max_row + 1
+    label_col = headers.index("Município Emissor") + 1
+    c = ws.cell(row=total_row, column=label_col, value="TOTAL")
+    c.font = Font(bold=True)
+    c.fill = PatternFill("solid", fgColor=_GREEN_LIGHT)
+    c.border = _thin_border()
+    c.alignment = Alignment(horizontal="right")
+
+    for h in _MONEY_COLS_COMPLETO:
+        col_idx = headers.index(h) + 1
+        tc = ws.cell(row=total_row, column=col_idx)
+        tc.value = df[h].apply(_parse_value).sum()
+        tc.font = Font(bold=True)
+        tc.number_format = '#,##0.00'
+        tc.fill = PatternFill("solid", fgColor=_GREEN_LIGHT)
+        tc.border = _thin_border()
+        tc.alignment = Alignment(horizontal="center")
+
     ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
     ws.freeze_panes = "A2"
