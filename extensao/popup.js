@@ -69,8 +69,10 @@ document.getElementById("btnBuscar").addEventListener("click", async () => {
     }
 
     addLog(`🏁 Concluído — ${dadosColetados.length} nota(s) no total`);
-    setStatus(`✅ ${dadosColetados.length} nota(s) encontrada(s). Clique em Baixar Excel.`);
+    setStatus(`✅ ${dadosColetados.length} nota(s) encontrada(s). Baixando arquivo…`);
     document.getElementById("btnBaixar").style.display = "block";
+    baixarCSV(dadosColetados, di, df, completo);
+    setStatus(`✅ ${dadosColetados.length} nota(s) encontrada(s). Download iniciado.`);
 
   } catch (e) {
     setStatus("❌ Erro: " + e.message);
