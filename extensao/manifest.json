@@ -3,10 +3,16 @@
   "name": "NFS-e Extrator",
   "version": "1.0",
   "description": "Extrai notas fiscais do portal NFS-e e gera relatório Excel",
-  "permissions": ["downloads"],
+  "minimum_chrome_version": "114",
+  "permissions": ["downloads", "tabs", "scripting", "sidePanel"],
   "host_permissions": ["https://www.nfse.gov.br/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "NFS-e Extrator"
+    "default_title": "NFS-e Extrator — clique para abrir o painel lateral"
   }
 }

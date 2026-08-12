@@ -212,8 +212,8 @@ def _build_details(wb: Workbook, df: pd.DataFrame):
     ws = wb.create_sheet("Detalhes")
     ws.sheet_view.showGridLines = False
 
-    headers = ["Geração", "Emitida Para", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação"]
-    col_widths = [14, 40, 14, 20, 20, 16]
+    headers = ["Geração", "Emitida Para", "Nome Cliente", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação"]
+    col_widths = [14, 40, 32, 14, 20, 20, 16]
 
     # Cabeçalho
     for i, h in enumerate(headers, 1):
@@ -229,7 +229,10 @@ def _build_details(wb: Workbook, df: pd.DataFrame):
         return
 
     # Dados
-    display_cols = ["Geração", "Emitida Para", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação"]
+    display_cols = ["Geração", "Emitida Para", "Nome Cliente", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação"]
+    for h in display_cols:
+        if h not in df.columns:
+            df[h] = ""
     for row_idx, (_, row) in enumerate(df[display_cols].iterrows(), start=2):
         fill = PatternFill("solid", fgColor=_ZEBRA) if row_idx % 2 == 0 else PatternFill("solid", fgColor="FFFFFF")
         for col_idx, val in enumerate(row, start=1):
@@ -238,7 +241,7 @@ def _build_details(wb: Workbook, df: pd.DataFrame):
             if col_idx == 1 and pd.notna(val) and isinstance(val, pd.Timestamp):
                 c.value = val.to_pydatetime()
                 c.number_format = "DD/MM/YYYY"
-            elif col_idx == 5:
+            elif col_idx == 6:
                 c.value = _parse_value(str(val))
                 c.number_format = '#,##0.00'
             else:
@@ -249,13 +252,13 @@ def _build_details(wb: Workbook, df: pd.DataFrame):
 
     # Linha de total
     total_row = ws.max_row + 1
-    c = ws.cell(row=total_row, column=4, value="TOTAL")
+    c = ws.cell(row=total_row, column=5, value="TOTAL")
     c.font = Font(bold=True)
     c.fill = PatternFill("solid", fgColor=_GREEN_LIGHT)
     c.border = _thin_border()
     c.alignment = Alignment(horizontal="right")
 
-    total_c = ws.cell(row=total_row, column=5)
+    total_c = ws.cell(row=total_row, column=6)
     total_c.value = df["Valor"].sum()
     total_c.font = Font(bold=True)
     total_c.number_format = '#,##0.00'
@@ -274,7 +277,7 @@ def _build_details(wb: Workbook, df: pd.DataFrame):
 
 _HEADERS_COMPLETO = [
     # Colunas base da tabela
-    "Geração", "Emitida Para", "Competência", "Município Emissor",
+    "Geração", "Emitida Para", "Nome Cliente", "Competência", "Município Emissor",
     "Preço Serviço (R$)", "Situação",
     # Identificação
     "Número NFS-e", "Chave de Acesso", "Situação NFS-e", "Número DPS",
@@ -305,7 +308,7 @@ _HEADERS_COMPLETO = [
 ]
 
 _WIDTHS_COMPLETO = [
-    14, 40, 14, 22, 20, 14,                          # base
+    14, 40, 32, 14, 22, 20, 14,                      # base
     16, 44, 14, 16, 10, 20, 18, 22,                  # identificação
     20, 36, 14, 18, 20,                               # prestador
     20, 36, 32, 30, 18, 20, 14, 14,                  # tomador
@@ -326,7 +329,7 @@ _MONEY_COLS_COMPLETO = {
     "Valor Total Retenções", "Valor Líquido",
 }
 _PCT_COLS_COMPLETO = {"Alíquota ISS (%)", "Alíquota PIS (%)", "Alíquota COFINS (%)", "DED/RED (%)"}
-_LEFT_COLS_COMPLETO = {"Emitida Para", "Nome Prestador", "Nome Tomador", "Email Tomador", "Discriminação", "URL"}
+_LEFT_COLS_COMPLETO = {"Emitida Para", "Nome Cliente", "Nome Prestador", "Nome Tomador", "Email Tomador", "Discriminação", "URL"}
 
 
 def generate_report_completo(records: list[dict], data_inicial: str, data_final: str) -> bytes:

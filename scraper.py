@@ -13,8 +13,15 @@ EMITIDAS_URL = f"{BASE_URL}/EmissorNacional/Notas/Emitidas"
 XML_NS      = "http://www.sped.fazenda.gov.br/nfse"
 TIMEOUT     = 60
 MAX_RETRIES = 5
-DELAY       = 0.5
+# O portal parece limitar a taxa de requisições por sessão/IP (bloqueio
+# silencioso, sem erro — a página some e volta vazia). Delay alto reduz a
+# chance de disparar esse limite.
+DELAY       = 2.5
 XML_WORKERS = 3
+# Página vazia mas o portal ainda informa mais páginas => provável bloqueio
+# temporário (rate limit) do portal por requisições em rajada. Tenta de novo
+# com espera bem mais longa antes de desistir.
+RETRY_DELAYS_EMPTY = [10, 20, 40, 60]
 
 
 class ScraperError(Exception):
@@ -45,19 +52,42 @@ class NFSeScraper:
     def run(self) -> list[dict]:
         self._criar_sessao()
 
-        total_pages   = self._total_paginas()
-        pages_to_fetch = min(total_pages, self.max_pages)
-        self.progress(f"Total: {total_pages} página(s). Coletando dados…", 10)
-        self.log(f"✅ Sessão ativa — {total_pages} página(s) encontrada(s)")
+        total_pages_estimado = self._total_paginas()
+        self.progress(f"Total estimado: {total_pages_estimado} página(s). Coletando dados…", 10)
+        self.log(f"✅ Sessão ativa — {total_pages_estimado} página(s) informada(s) pelo portal (estimativa)")
 
-        # 1. Coleta tabela página a página
+        # Não confia apenas no total informado pelo widget de paginação do
+        # portal, pois ele pode exibir só uma janela de páginas (ex.: até a
+        # 21) mesmo havendo mais resultados. Continua até uma página vir vazia.
         all_records = []
-        for pg in range(1, pages_to_fetch + 1):
-            pct = 10 + int(50 * pg / pages_to_fetch)
-            self.progress(f"Página {pg}/{pages_to_fetch}…", pct)
+        pg = 0
+        tentativas_vazias = 0
+        while True:
+            pg += 1
+            if pg > self.max_pages:
+                break
+            pct = 10 + int(50 * min(pg, total_pages_estimado) / max(total_pages_estimado, 1))
+            self.progress(f"Página {pg}…", min(pct, 60))
             rows = self._extrair_pagina(pg)
+
+            if not rows:
+                ainda_faltam_paginas = pg <= total_pages_estimado
+                if ainda_faltam_paginas and tentativas_vazias < len(RETRY_DELAYS_EMPTY):
+                    espera = RETRY_DELAYS_EMPTY[tentativas_vazias]
+                    tentativas_vazias += 1
+                    self.log(
+                        f"⚠️ Página {pg} veio vazia, mas o portal informa {total_pages_estimado} "
+                        f"página(s) — possível bloqueio temporário. Aguardando {espera}s e "
+                        f"tentando de novo ({tentativas_vazias}/{len(RETRY_DELAYS_EMPTY)})…"
+                    )
+                    time.sleep(espera)
+                    pg -= 1  # tenta a mesma página de novo
+                    continue
+                break  # fim real dos resultados, ou tentativas esgotadas
+
+            tentativas_vazias = 0
             all_records.extend(rows)
-            self.log(f"📄 Página {pg:>4}/{pages_to_fetch} — {len(rows)} registro(s)  (total: {len(all_records)})")
+            self.log(f"📄 Página {pg:>4} — {len(rows)} registro(s)  (total: {len(all_records)})")
             time.sleep(DELAY)
 
         # 2. Enriquece com dados do XML de cada nota (apenas relatório completo)
@@ -81,7 +111,11 @@ class NFSeScraper:
 
         self.session = requests.Session()
         self.session.cookies.update(cookies)
-        self.session.headers.update({"User-Agent": "Mozilla/5.0"})
+        self.session.headers.update({
+            "User-Agent": "Mozilla/5.0",
+            "Referer": EMITIDAS_URL,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        })
 
         r = self._get(EMITIDAS_URL, self._params(1))
         if "Login" in r.url or "login" in r.url:
@@ -143,9 +177,12 @@ class NFSeScraper:
                 if link:
                     xml_url = BASE_URL + link["href"]
 
+            emitida_para_bruto = cells[1].get_text(" ", strip=True)
+            emitida_para, nome_cliente = self._separar_nome_cliente(emitida_para_bruto)
             rows.append({
                 "Geração":            cells[0].get_text(strip=True),
-                "Emitida Para":       cells[1].get_text(" ", strip=True),
+                "Emitida Para":       emitida_para,
+                "Nome Cliente":       nome_cliente,
                 "Competência":        cells[2].get_text(strip=True),
                 "Município Emissor":  cells[3].get_text(strip=True),
                 "Preço Serviço (R$)": cells[4].get_text(strip=True),
@@ -162,6 +199,20 @@ class NFSeScraper:
             if titulo == "NFS-e cancelada": return "Cancelada"
             return titulo
         return cell.get_text(strip=True)
+
+    def _separar_nome_cliente(self, emitida_para_bruto: str) -> tuple[str, str]:
+        """"021.355.926-92 - MILLENA LUIZA DINIZ FERREIRA" ->
+        ("021.355.926-92", "MILLENA LUIZA DINIZ FERREIRA").
+
+        O CPF/CNPJ termina em "-DD" (dígito verificador) sem espaços; o nome
+        vem depois separado por " - " com espaços. Se não bater com esse
+        formato (ex.: já é só um nome/razão social), mantém "Emitida Para"
+        como veio e retorna nome vazio.
+        """
+        m = re.match(r"^([\d./]+-\d{2})\s*-\s*(.+)$", emitida_para_bruto)
+        if not m:
+            return emitida_para_bruto, ""
+        return m.group(1).strip(), m.group(2).strip()
 
     # ------------------------------------------------------------------
     # Enriquecimento com XML

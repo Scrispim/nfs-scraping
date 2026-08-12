@@ -1,8 +1,16 @@
 const BASE      = "https://www.nfse.gov.br/EmissorNacional/Notas/Emitidas";
 const BASE_HOST = "https://www.nfse.gov.br";
-const DELAY_MS  = 500;
+// O portal parece limitar a taxa de requisições por sessão/IP (bloqueio
+// silencioso, sem erro — a página some e volta vazia). Delay alto reduz a
+// chance de disparar esse limite; quanto mais rajadas recentes, mais cedo
+// ele parece disparar.
+const DELAY_MS  = 2500;
 const XML_NS    = "http://www.sped.fazenda.gov.br/nfse";
 const XML_WORKERS = 3;
+// Página vazia mas o portal ainda informa mais páginas => provável bloqueio
+// temporário (rate limit) do portal por requisições em rajada. Tenta de novo
+// com espera bem mais longa antes de desistir.
+const RETRY_DELAYS_MS = [10000, 20000, 40000, 60000];
 
 let dadosColetados = [];
 
@@ -52,15 +60,35 @@ document.getElementById("btnBuscar").addEventListener("click", async () => {
 
   try {
     setStatus("Verificando sessão e total de páginas…");
-    const totalPag = await getTotalPaginas(diaBR, dfBR);
-    addLog(`✅ Sessão ativa — ${totalPag} página(s) encontrada(s)`);
+    const totalPagEstimado = await getTotalPaginas(diaBR, dfBR);
+    addLog(`✅ Sessão ativa — ${totalPagEstimado} página(s) informada(s) pelo portal (estimativa)`);
 
-    for (let pg = 1; pg <= totalPag; pg++) {
-      setStatus(`Página ${pg}/${totalPag}…`);
+    // Não confia apenas no total informado pelo widget de paginação do portal,
+    // pois ele pode exibir só uma janela de páginas (ex.: até a 21) mesmo
+    // havendo mais resultados. Continua até uma página vir vazia.
+    let pg = 1;
+    let tentativasVazias = 0;
+    while (true) {
+      setStatus(`Página ${pg}${pg <= totalPagEstimado ? `/${totalPagEstimado}` : ""}…`);
       const rows = await extrairPagina(diaBR, dfBR, pg, completo);
+
+      if (rows.length === 0) {
+        const aindaFaltamPaginas = pg <= totalPagEstimado;
+        if (aindaFaltamPaginas && tentativasVazias < RETRY_DELAYS_MS.length) {
+          const espera = RETRY_DELAYS_MS[tentativasVazias];
+          tentativasVazias++;
+          addLog(`⚠️ Página ${pg} veio vazia, mas o portal informa ${totalPagEstimado} página(s) — possível bloqueio temporário do portal. Aguardando ${espera / 1000}s e tentando de novo (${tentativasVazias}/${RETRY_DELAYS_MS.length})…`);
+          await sleep(espera);
+          continue; // tenta a mesma página de novo
+        }
+        break; // fim real dos resultados, ou tentativas esgotadas
+      }
+
+      tentativasVazias = 0;
       dadosColetados.push(...rows);
       addLog(`📄 Página ${String(pg).padStart(4)} — ${rows.length} registro(s)  (total: ${dadosColetados.length})`);
-      if (pg < totalPag) await sleep(DELAY_MS);
+      pg++;
+      await sleep(DELAY_MS + Math.random() * 1000);
     }
 
     if (completo) {
@@ -77,6 +105,8 @@ document.getElementById("btnBuscar").addEventListener("click", async () => {
   } catch (e) {
     setStatus("❌ Erro: " + e.message);
     addLog("ERRO: " + e.message);
+  } finally {
+    await fecharTabDeTrabalho();
   }
 
   btn.disabled = false;
@@ -112,6 +142,7 @@ async function getTotalPaginas(di, df) {
 
 async function extrairPagina(di, df, pg, incluirXmlUrl) {
   const html = await fetchPagina(di, df, pg);
+  if (!html) throw new Error(`Sessão expirada durante a coleta (página ${pg}). Faça login novamente e tente de novo.`);
   const doc  = new DOMParser().parseFromString(html, "text/html");
   const rows = [];
   doc.querySelectorAll("table tbody tr").forEach(tr => {
@@ -127,9 +158,12 @@ async function extrairPagina(di, df, pg, incluirXmlUrl) {
       if (link) xmlUrl = BASE_HOST + link.getAttribute("href");
     }
 
+    const emitidaParaBruto = cells[1].innerText.trim().replace(/\s+/g, " ");
+    const { emitidaPara, nomeCliente } = separarNomeCliente(emitidaParaBruto);
     rows.push({
       "Geração":            cells[0].innerText.trim(),
-      "Emitida Para":       cells[1].innerText.trim().replace(/\s+/g, " "),
+      "Emitida Para":       emitidaPara,
+      "Nome Cliente":       nomeCliente,
       "Competência":        cells[2].innerText.trim(),
       "Município Emissor":  cells[3].innerText.trim(),
       "Preço Serviço (R$)": cells[4].innerText.trim(),
@@ -140,11 +174,73 @@ async function extrairPagina(di, df, pg, incluirXmlUrl) {
   return rows;
 }
 
+// ------------------------------------------------------------------
+// Busca de página via navegação real de aba (não fetch())
+// ------------------------------------------------------------------
+// O portal responde de forma diferente a partir de um certo ponto quando a
+// requisição vem de fetch() em background (sem os headers/contexto de uma
+// navegação de verdade). Abrindo uma aba oculta e navegando de fato para a
+// URL, o comportamento é idêntico ao de navegar manualmente no navegador.
+
+let workTabId = null;
+
+async function garantirTabDeTrabalho() {
+  if (workTabId !== null) {
+    try {
+      await chrome.tabs.get(workTabId);
+      return workTabId;
+    } catch (e) {
+      workTabId = null;
+    }
+  }
+  const tab = await chrome.tabs.create({ url: "about:blank", active: false });
+  workTabId = tab.id;
+  return workTabId;
+}
+
+async function fecharTabDeTrabalho() {
+  if (workTabId !== null) {
+    try { await chrome.tabs.remove(workTabId); } catch (e) { /* já fechada */ }
+    workTabId = null;
+  }
+}
+
+function esperarNavegacaoCompleta(tabId) {
+  return new Promise((resolve) => {
+    let resolvido = false;
+    function finalizar() {
+      if (resolvido) return;
+      resolvido = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    }
+    function listener(updatedTabId, changeInfo, tab) {
+      if (updatedTabId !== tabId) return;
+      if (changeInfo.status === "complete" && tab.url && tab.url.includes("/EmissorNacional/")) {
+        finalizar();
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener);
+    setTimeout(finalizar, 25000); // failsafe: nunca trava o loop indefinidamente
+  });
+}
+
 async function fetchPagina(di, df, pg) {
   const url = `${BASE}?datainicio=${encodeURIComponent(di)}&datafim=${encodeURIComponent(df)}&pg=${pg}`;
-  const resp = await fetch(url, { credentials: "include" });
-  if (resp.url.includes("Login") || resp.url.includes("login")) return null;
-  return resp.text();
+  const tabId = await garantirTabDeTrabalho();
+
+  const espera = esperarNavegacaoCompleta(tabId);
+  await chrome.tabs.update(tabId, { url });
+  await espera;
+
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.url && (tab.url.includes("Login") || tab.url.includes("login"))) return null;
+
+  const [{ result: html }] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => document.documentElement.outerHTML,
+  });
+  return html || null;
 }
 
 // ------------------------------------------------------------------
@@ -311,17 +407,29 @@ function parseSituacao(cell) {
   return cell.innerText.trim();
 }
 
+// "021.355.926-92 - MILLENA LUIZA DINIZ FERREIRA" ->
+//   { emitidaPara: "021.355.926-92", nomeCliente: "MILLENA LUIZA DINIZ FERREIRA" }
+// O CPF/CNPJ termina em "-DD" (dígito verificador) sem espaços; o nome vem
+// depois separado por " - " com espaços. Se não bater com esse formato
+// (ex.: já é só um nome/razão social), mantém "Emitida Para" como veio e
+// deixa "Nome Cliente" vazio.
+function separarNomeCliente(emitidaParaBruto) {
+  const m = emitidaParaBruto.match(/^([\d.\/]+-\d{2})\s*-\s*(.+)$/);
+  if (!m) return { emitidaPara: emitidaParaBruto, nomeCliente: "" };
+  return { emitidaPara: m[1].trim(), nomeCliente: m[2].trim() };
+}
+
 // ------------------------------------------------------------------
 // Gera CSV e baixa
 // ------------------------------------------------------------------
 
 const HEADERS_SIMPLES = [
-  "Geração", "Emitida Para", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação",
+  "Geração", "Emitida Para", "Nome Cliente", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação",
 ];
 
 const HEADERS_COMPLETO = [
   // Colunas base
-  "Geração", "Emitida Para", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação",
+  "Geração", "Emitida Para", "Nome Cliente", "Competência", "Município Emissor", "Preço Serviço (R$)", "Situação",
   // Identificação
   "Número NFS-e", "Chave de Acesso", "Situação NFS-e", "Número DPS",
   "Série", "Data Emissão", "Data Competência", "Localidade Incidência",
